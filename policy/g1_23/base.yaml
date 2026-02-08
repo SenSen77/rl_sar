@@ -146,29 +146,64 @@ g1_23:
     - 10.0
     - 10.0
 
-  # Torque limits: align to IsaacLab effort_limit_sim (feet are 20, others 300).
+  # Torque limits aligned to mjlab training (effort_limit per actuator).
+  # IMPORTANT: Order follows this file's `joint_names`.
   torque_limits:
-    - 300.0
-    - 300.0
-    - 300.0
-    - 300.0
-    - 20.0
-    - 20.0
-    - 300.0
-    - 300.0
-    - 300.0
-    - 300.0
-    - 20.0
-    - 20.0
-    - 300.0
-    - 300.0
-    - 300.0
-    - 300.0
-    - 300.0
-    - 300.0
-    - 300.0
-    - 300.0
-    - 300.0
-    - 300.0
-    - 300.0
+    - 88.0
+    - 139.0
+    - 88.0
+    - 139.0
+    - 50.0
+    - 50.0
+    - 88.0
+    - 139.0
+    - 88.0
+    - 139.0
+    - 50.0
+    - 50.0
+    - 88.0
+    - 25.0
+    - 25.0
+    - 25.0
+    - 25.0
+    - 25.0
+    - 25.0
+    - 25.0
+    - 25.0
+    - 25.0
+    - 25.0
+
+  # Optional mjlab-parity: encoder bias.
+  #
+  # mjlab tracking observations use joint_pos_rel(biased=True) and actions subtract encoder_bias
+  # before applying position targets. Without this, the same policy can exhibit a constant
+  # offset (especially in arms) when deployed in rl_sar.
+  #
+  # For sim2real: set encoder_bias to your calibrated joint zero offsets.
+  use_encoder_bias: true
+  # IMPORTANT: Order follows `joint_names` above.
+  encoder_bias:
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.87
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.87
+    - 0.0
 

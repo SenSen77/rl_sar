@@ -1,0 +1,21 @@
+{
+	"folders": [
+		{
+			"name": "robot_lab_v2.2.1",
+			"path": "../robot_lab_v2.2.1"
+		},
+		{
+			"name": "robot_lab_v2.3.0",
+			"path": "../robot_lab_v2.3.0"
+		},
+		{
+			"name": "rl_sar",
+			"path": "."
+		},
+		{
+			"name": "GMR",
+			"path": "../GMR"
+		}
+	],
+	"settings": {}
+}

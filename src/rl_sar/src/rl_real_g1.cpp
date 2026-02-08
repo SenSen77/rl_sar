@@ -20,7 +20,9 @@ RL_Real::RL_Real(int argc, char **argv)
 
     // read params from yaml
     this->ang_vel_axis = "body";
-    this->robot_name = "g1";
+    // Optional: choose robot type by CLI argument for sim2real separation.
+    // Usage (non-ROS): ./rl_real_g1 <networkInterface> [g1|g1_23]
+    this->robot_name = (argc >= 3) ? std::string(argv[2]) : "g1";
     this->ReadYaml(this->robot_name, "base.yaml");
 
     // auto load FSM by robot_name
@@ -381,7 +383,7 @@ int main(int argc, char **argv)
 {
     if (argc < 2)
     {
-        std::cout << LOGGER::ERROR << "Usage: " << argv[0] << " networkInterface" << std::endl;
+        std::cout << LOGGER::ERROR << "Usage: " << argv[0] << " networkInterface [g1|g1_23]" << std::endl;
         throw std::runtime_error("Invalid arguments");
     }
     ChannelFactory::Instance()->Init(0, argv[1]);

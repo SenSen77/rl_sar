@@ -12,6 +12,26 @@
 namespace g1_fsm
 {
 
+// Helper: safely read waist angles (yaw/roll/pitch) from current robot state.
+// For 23DoF G1 variants, waist roll/pitch may be missing/locked; missing entries default to 0.
+static inline std::vector<float> GetWaistAnglesSafe(const RL& rl, const RobotState<float>* state)
+{
+    std::vector<float> waist_angles(3, 0.0f);
+    if (!state) return waist_angles;
+    if (!rl.params.Has("waist_joint_indices")) return waist_angles;
+
+    auto waist_sdk_indices = rl.params.Get<std::vector<int>>("waist_joint_indices");
+    for (size_t i = 0; i < waist_angles.size() && i < waist_sdk_indices.size(); ++i)
+    {
+        int mapped = rl.InverseJointMapping(waist_sdk_indices[i]);
+        if (mapped >= 0 && static_cast<size_t>(mapped) < state->motor_state.q.size())
+        {
+            waist_angles[i] = state->motor_state.q[mapped];
+        }
+    }
+    return waist_angles;
+}
+
 class RLFSMStatePassive : public RLFSMState
 {
 public:
@@ -196,6 +216,10 @@ RLFSMStateRLRoboMimicLocomotion(RL *rl) : RLFSMState(*rl, "RLFSMStateRLRoboMimic
         {
             return "RLFSMStateRLWholeBodyTrackingGangnamStyle";
         }
+        else if (rl.control.current_keyboard == Input::Keyboard::Num5 )
+        {
+            return "RLFSMStateRLWholeBodyTrackingMimic";
+        }
         return state_name_;
     }
 };
@@ -299,13 +323,7 @@ public:
             rl.motion_loader = std::make_unique<MotionLoader>(motion_file_path, fps);
             rl.motion_length = rl.motion_loader->GetDuration();
 
-            auto waist_sdk_indices = rl.params.Get<std::vector<int>>("waist_joint_indices");
-            std::vector<float> waist_angles = {
-                fsm_state->motor_state.q[rl.InverseJointMapping(waist_sdk_indices[0])],
-                fsm_state->motor_state.q[rl.InverseJointMapping(waist_sdk_indices[1])],
-                fsm_state->motor_state.q[rl.InverseJointMapping(waist_sdk_indices[2])]
-            };
-            rl.motion_loader->Reset(fsm_state->imu.quaternion, waist_angles);
+            rl.motion_loader->Reset(fsm_state->imu.quaternion, GetWaistAnglesSafe(rl, fsm_state));
 
             std::cout << LOGGER::INFO << "Motion duration: " << rl.motion_length << "s" << std::endl;
 
@@ -391,13 +409,7 @@ RLFSMStateRLWholeBodyTrackingGangnamStyle(RL *rl) : RLFSMState(*rl, "RLFSMStateR
             rl.motion_loader = std::make_unique<MotionLoader>(motion_file_path, fps);
             rl.motion_length = rl.motion_loader->GetDuration();
 
-            auto waist_sdk_indices = rl.params.Get<std::vector<int>>("waist_joint_indices");
-            std::vector<float> waist_angles = {
-                fsm_state->motor_state.q[rl.InverseJointMapping(waist_sdk_indices[0])],
-                fsm_state->motor_state.q[rl.InverseJointMapping(waist_sdk_indices[1])],
-                fsm_state->motor_state.q[rl.InverseJointMapping(waist_sdk_indices[2])]
-            };
-            rl.motion_loader->Reset(fsm_state->imu.quaternion, waist_angles);
+            rl.motion_loader->Reset(fsm_state->imu.quaternion, GetWaistAnglesSafe(rl, fsm_state));
 
             std::cout << LOGGER::INFO << "Motion duration: " << rl.motion_length << "s" << std::endl;
 
@@ -461,6 +473,94 @@ RLFSMStateRLWholeBodyTrackingGangnamStyle(RL *rl) : RLFSMState(*rl, "RLFSMStateR
     }
 };
 
+class RLFSMStateRLWholeBodyTrackingMimic : public RLFSMState
+{
+public:
+    RLFSMStateRLWholeBodyTrackingMimic(RL *rl) : RLFSMState(*rl, "RLFSMStateRLWholeBodyTrackingMimic") {}
+
+    void Enter() override
+    {
+        rl.episode_length_buf = 0;
+
+        // read params from yaml
+        // 29DoF G1 keeps the legacy layout: policy/g1/whole_body_tracking/mimic
+        rl.config_name = "whole_body_tracking/mimic";
+        std::string robot_config_path = rl.robot_name + "/" + rl.config_name;
+        try
+        {
+            rl.InitRL(robot_config_path);
+
+            // Initialize motion loader only when motion_file is provided.
+            // (Some deployments use a pure policy without motion reference; in that case we feed zeros in obs terms.)
+            rl.motion_loader.reset();
+            rl.motion_length = 0.0f;
+            if (rl.params.Has("motion_file"))
+            {
+                std::string motion_file_path = std::string(POLICY_DIR) + "/" + robot_config_path + "/" + rl.params.Get<std::string>("motion_file");
+                float fps = 1.0f / (rl.params.Get<float>("dt") * rl.params.Get<int>("decimation"));
+                rl.motion_loader = std::make_unique<MotionLoader>(motion_file_path, fps);
+                rl.motion_length = rl.motion_loader->GetDuration();
+                rl.motion_loader->Reset(fsm_state->imu.quaternion, GetWaistAnglesSafe(rl, fsm_state));
+                std::cout << LOGGER::INFO << "Motion duration: " << rl.motion_length << "s" << std::endl;
+            }
+
+            rl.now_state = *fsm_state;
+        }
+        catch (const std::exception& e)
+        {
+            std::cout << LOGGER::ERROR << "InitRL() failed: " << e.what() << std::endl;
+            rl.rl_init_done = false;
+            rl.fsm.RequestStateChange("RLFSMStatePassive");
+        }
+    }
+
+    void Run() override
+    {
+        if (!rl.rl_init_done) rl.rl_init_done = true;
+
+        if (rl.motion_loader && rl.motion_length > 0.0f)
+        {
+            float motion_time = rl.episode_length_buf * rl.params.Get<float>("dt") * rl.params.Get<int>("decimation");
+            motion_time = std::fmin(motion_time, rl.motion_length);
+            float percent = motion_time / rl.motion_length;
+            LOGGER::PrintProgress(percent, rl.config_name);
+            rl.motion_loader->Update(motion_time);
+        }
+        else
+        {
+            std::cout << "\r\033[K" << std::flush << LOGGER::INFO << "RL Controller [" << rl.config_name << "] x:" << rl.control.x << " y:" << rl.control.y << " yaw:" << rl.control.yaw << std::flush;
+        }
+
+        RLControl();
+    }
+
+    void Exit() override
+    {
+        rl.rl_init_done = false;
+    }
+
+    std::string CheckChange() override
+    {
+        if (rl.control.current_keyboard == Input::Keyboard::P || rl.control.current_gamepad == Input::Gamepad::LB_X)
+        {
+            return "RLFSMStatePassive";
+        }
+        else if (rl.control.current_keyboard == Input::Keyboard::Num9 || rl.control.current_gamepad == Input::Gamepad::B)
+        {
+            return "RLFSMStateGetDown";
+        }
+        else if (rl.control.current_keyboard == Input::Keyboard::Num0 || rl.control.current_gamepad == Input::Gamepad::A)
+        {
+            return "RLFSMStateGetUp";
+        }
+        else if (rl.control.current_keyboard == Input::Keyboard::Num1 || rl.control.current_gamepad == Input::Gamepad::RB_DPadUp)
+        {
+            return "RLFSMStateRLRoboMimicLocomotion";
+        }
+        return state_name_;
+    }
+};
+
 } // namespace g1_fsm
 
 class G1FSMFactory : public FSMFactory
@@ -484,6 +584,8 @@ public:
             return std::make_shared<g1_fsm::RLFSMStateRLWholeBodyTrackingDance102>(rl);
         else if (state_name == "RLFSMStateRLWholeBodyTrackingGangnamStyle")
             return std::make_shared<g1_fsm::RLFSMStateRLWholeBodyTrackingGangnamStyle>(rl);
+        else if (state_name == "RLFSMStateRLWholeBodyTrackingMimic")
+            return std::make_shared<g1_fsm::RLFSMStateRLWholeBodyTrackingMimic>(rl);
         return nullptr;
     }
     std::string GetType() const override { return "g1"; }
@@ -496,7 +598,8 @@ public:
             "RLFSMStateRLRoboMimicLocomotion",
             "RLFSMStateRLRoboMimicCharleston",
             "RLFSMStateRLWholeBodyTrackingDance102",
-            "RLFSMStateRLWholeBodyTrackingGangnamStyle"
+            "RLFSMStateRLWholeBodyTrackingGangnamStyle",
+            "RLFSMStateRLWholeBodyTrackingMimic"
         };
     }
     std::string GetInitialState() const override { return initial_state_; }
@@ -505,16 +608,5 @@ private:
 };
 
 REGISTER_FSM_FACTORY(G1FSMFactory, "RLFSMStatePassive")
-
-// Alias factory for 23DoF G1 configs (e.g. policy/g1_23/*).
-// This allows using `robot_name:=g1_23` in simulation while reusing the same FSM states.
-class G1_23FSMFactory : public G1FSMFactory
-{
-public:
-    using G1FSMFactory::G1FSMFactory;
-    std::string GetType() const override { return "g1_23"; }
-};
-
-REGISTER_FSM_FACTORY(G1_23FSMFactory, "RLFSMStatePassive")
 
 #endif // G1_FSM_HPP

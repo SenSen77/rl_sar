@@ -17,8 +17,12 @@ g1_23/robomimic/locomotion:
 
   num_of_dofs: 23
   num_observations: 78  # 3 + 3 + 3 + 23 + 23 + 23
-
+  debug_print_obs: true
+        
   clip_obs: 100.0
+  # NOTE:
+  # - IsaacLab training used JointPositionActionCfg(scale=0.25, clip=(-100, 100)).
+  # - Keep the same clip range here for behavior parity during sim2sim debugging.
   clip_actions_lower: [-100.0, -100.0, -100.0, -100.0, -100.0, -100.0,
                        -100.0, -100.0, -100.0, -100.0, -100.0, -100.0,
                        -100.0,
