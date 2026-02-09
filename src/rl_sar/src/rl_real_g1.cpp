@@ -112,6 +112,15 @@ void RL_Real::GetState(RobotState<float> *state)
         }
         this->mode_machine = this->unitree_low_state.mode_machine();
     }
+    // Keep mode_pr consistent with the robot-reported value.
+    // Some firmware variants will ignore lowcmd if mode_pr mismatches.
+    const uint8_t lowstate_mode_pr_u8 = this->unitree_low_state.mode_pr();
+    const Mode lowstate_mode_pr = static_cast<Mode>(lowstate_mode_pr_u8);
+    if (this->mode_pr != lowstate_mode_pr)
+    {
+        this->mode_pr = lowstate_mode_pr;
+        std::cout << LOGGER::INFO << "Sync mode_pr from lowstate: " << unsigned(lowstate_mode_pr_u8) << std::endl;
+    }
 
     memcpy(this->remote_data_rx.buff, &unitree_low_state.wireless_remote()[0], 40);
     this->gamepad.update(this->remote_data_rx.RF_RX);
@@ -337,7 +346,8 @@ uint32_t RL_Real::Crc32Core(uint32_t *ptr, uint32_t len)
 
 void RL_Real::InitLowCmd()
 {
-    for (int i = 0; i < 32; ++i)
+    // HG LowCmd uses 35 motors.
+    for (int i = 0; i < 35; ++i)
     {
         this->unitree_low_command.motor_cmd()[i].mode() = (1); // 1:Enable, 0:Disable
         this->unitree_low_command.motor_cmd()[i].q() = (0);

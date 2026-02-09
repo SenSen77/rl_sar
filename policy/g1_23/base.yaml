@@ -64,8 +64,17 @@ g1_23:
     - right_elbow_controller
     - right_wrist_roll_controller
 
-  # Identity mapping for ROS controllers when joint order is preserved.
-  joint_mapping: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]
+  # Mapping from THIS FILE's `joint_names` order -> Unitree LowCmd_/LowState_ motor index.
+  #
+  # IMPORTANT:
+  # - 23DOF G1 uses LowCmd_.mode_machine == 1.
+  # - Motor indices have gaps (unused slots) for missing joints (waist roll/pitch, wrist pitch/yaw).
+  # - Reference: https://support.unitree.com/home/zh/G1_developer/joint_motor_sequence (23DOF table)
+  #
+  # This mapping is critical for sim2real:
+  # - GetState(): reads motor_state[q/dq/tau] from the correct motor indices
+  # - SetCommand(): writes motor_cmd[q/dq/kp/kd/tau] to the correct motor indices
+  joint_mapping: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 15, 16, 17, 18, 19, 22, 23, 24, 25, 26]
 
   # Default pose (critical): align with IsaacLab G1 init_state.joint_pos used in training.
   # Source: IsaacLab isaaclab_assets/robots/unitree.py (G1_CFG.init_state.joint_pos)

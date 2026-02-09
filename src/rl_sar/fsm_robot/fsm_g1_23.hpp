@@ -18,6 +18,21 @@
 namespace g1_23_fsm
 {
 
+static inline std::vector<float> GetDefaultDofPosCommandSafe(const RL& rl)
+{
+    // IMPORTANT:
+    // RL policy path applies encoder bias correction when computing position targets:
+    //   q_target = default_dof_pos + action - encoder_bias
+    // For state transitions (GetUp / JointIndexTest stand pose), we should command the same
+    // bias-corrected default pose to avoid wrong posture (esp. elbows) and reduce switching jump.
+    auto q_def = rl.params.Get<std::vector<float>>("default_dof_pos");
+    if (!rl.params.Get<bool>("use_encoder_bias", false)) return q_def;
+    if (!rl.params.Has("encoder_bias")) return q_def;
+    auto bias = rl.params.Get<std::vector<float>>("encoder_bias");
+    if (bias.size() != q_def.size()) return q_def;
+    return q_def - bias;
+}
+
 static inline std::vector<float> GetWaistAnglesSafe(const RL& rl, const RobotState<float>* state)
 {
     std::vector<float> waist_angles(3, 0.0f);
@@ -75,17 +90,52 @@ public:
     RLFSMStateGetUp(RL *rl) : RLFSMState(*rl, "RLFSMStateGetUp") {}
 
     float percent_getup = 0.0f;
+    bool printed_debug = false;
 
     void Enter() override
     {
         percent_getup = 0.0f;
+        printed_debug = false;
         rl.now_state = *fsm_state;
         rl.start_state = rl.now_state;
     }
 
     void Run() override
     {
-        Interpolate(percent_getup, rl.now_state.motor_state.q, rl.params.Get<std::vector<float>>("default_dof_pos"), 2.0f, "Getting up", true);
+        auto q_target = GetDefaultDofPosCommandSafe(rl);
+
+        // One-shot debug for suspected shoulder/elbow mismatch.
+        // (Print once near the start to avoid spamming logs.)
+        if (!printed_debug && percent_getup < 0.05f && rl.params.Has("joint_names"))
+        {
+            printed_debug = true;
+            const auto names = rl.params.Get<std::vector<std::string>>("joint_names");
+            const auto mapping = rl.params.Get<std::vector<int>>("joint_mapping");
+            auto print_one = [&](const std::string& joint_name)
+            {
+                for (int i = 0; i < (int)names.size() && i < (int)mapping.size() && i < (int)q_target.size(); ++i)
+                {
+                    if (names[i] == joint_name)
+                    {
+                        const float q_cur = (i < (int)fsm_state->motor_state.q.size()) ? fsm_state->motor_state.q[i] : 0.0f;
+                        const float q_tgt = q_target[i];
+                        std::cout << std::endl
+                                  << LOGGER::INFO
+                                  << "[GetUpDebug] dof_idx=" << i
+                                  << " sdk_idx=" << mapping[i]
+                                  << " name=" << joint_name
+                                  << " q_cur=" << q_cur
+                                  << " q_tgt=" << q_tgt
+                                  << std::endl;
+                        return;
+                    }
+                }
+            };
+            print_one("left_shoulder_roll_joint");
+            print_one("left_elbow_joint");
+        }
+
+        Interpolate(percent_getup, rl.now_state.motor_state.q, q_target, 2.0f, "Getting up", true);
     }
 
     void Exit() override {}
@@ -226,45 +276,87 @@ class RLFSMStateJointIndexTest : public RLFSMState
 public:
     RLFSMStateJointIndexTest(RL *rl) : RLFSMState(*rl, "RLFSMStateJointIndexTest") {}
 
-    int joint_idx = 0;
+    // Unitree LowCmd_/LowState_ motor index (IDL index).
+    // For G1 23DOF (mode_machine == 1), valid indices include gaps (empty slots).
+    int sdk_motor_idx = 0;
     float amp = 0.10f;   // rad
     float hz = 0.50f;    // Hz
     unsigned long long tick = 0;
     unsigned long long last_print_tick = 0;
 
+    static inline std::vector<std::string> G1_23DocMotorNames()
+    {
+        // Reference (23DOF table):
+        // https://support.unitree.com/home/zh/G1_developer/joint_motor_sequence
+        //
+        // Note: indices 4/5/10/11 have A/B naming under mode_pr==1.
+        // We print a combined label to avoid depending on mode_pr in FSM.
+        return {
+            "L_LEG_HIP_PITCH",        // 0
+            "L_LEG_HIP_ROLL",         // 1
+            "L_LEG_HIP_YAW",          // 2
+            "L_LEG_KNEE",             // 3
+            "L_LEG_ANKLE_PITCH/B",    // 4
+            "L_LEG_ANKLE_ROLL/A",     // 5
+            "R_LEG_HIP_PITCH",        // 6
+            "R_LEG_HIP_ROLL",         // 7
+            "R_LEG_HIP_YAW",          // 8
+            "R_LEG_KNEE",             // 9
+            "R_LEG_ANKLE_PITCH/B",    // 10
+            "R_LEG_ANKLE_ROLL/A",     // 11
+            "WAIST_YAW",              // 12
+            "(empty)",                // 13
+            "(empty)",                // 14
+            "L_SHOULDER_PITCH",       // 15
+            "L_SHOULDER_ROLL",        // 16
+            "L_SHOULDER_YAW",         // 17
+            "L_ELBOW",                // 18
+            "L_WRIST_ROLL",           // 19
+            "(empty)",                // 20
+            "(empty)",                // 21
+            "R_SHOULDER_PITCH",       // 22
+            "R_SHOULDER_ROLL",        // 23
+            "R_SHOULDER_YAW",         // 24
+            "R_ELBOW",                // 25
+            "R_WRIST_ROLL",           // 26
+            "(empty)",                // 27
+            "(empty)",                // 28
+        };
+    }
+
     void Enter() override
     {
         tick = 0;
         last_print_tick = 0;
-        joint_idx = 0;
+        sdk_motor_idx = 0;
         amp = 0.10f;
         hz = 0.50f;
         rl.episode_length_buf = 0;
         std::cout << std::endl << LOGGER::NOTE
-                  << "[JointIndexTest] Num7:idx++ Num8:idx--  +/-:amp  Space:amp=0  Num0:GetUp  Num9:GetDown  P:Passive"
+                  << "[JointIndexTest] Num7:sdk_idx++ Num8:sdk_idx--  +/-:amp  Space:amp=0  Num0:GetUp  Num9:GetDown  P:Passive"
                   << std::endl;
     }
 
     void Run() override
     {
         const int n = rl.params.Get<int>("num_of_dofs");
-        auto q_def = rl.params.Get<std::vector<float>>("default_dof_pos");
+        auto q_def = GetDefaultDofPosCommandSafe(rl);
         auto kp = rl.params.Get<std::vector<float>>("fixed_kp");
         auto kd = rl.params.Get<std::vector<float>>("fixed_kd");
 
-        // Bounds safety
-        if (joint_idx < 0) joint_idx = 0;
-        if (joint_idx >= n) joint_idx = n - 1;
+        // Bounds safety (IDL motor index: 0..28 for the G1 body table)
+        if (sdk_motor_idx < 0) sdk_motor_idx = 0;
+        if (sdk_motor_idx > 28) sdk_motor_idx = 28;
 
         // Handle in-state key events (non-interactive, edge-trigger not required)
         if (rl.control.current_keyboard == Input::Keyboard::Num7 || rl.control.current_gamepad == Input::Gamepad::DPadRight)
         {
-            joint_idx = std::min(joint_idx + 1, n - 1);
+            sdk_motor_idx = std::min(sdk_motor_idx + 1, 28);
             rl.control.ClearInput();
         }
         else if (rl.control.current_keyboard == Input::Keyboard::Num8 || rl.control.current_gamepad == Input::Gamepad::DPadLeft)
         {
-            joint_idx = std::max(joint_idx - 1, 0);
+            sdk_motor_idx = std::max(sdk_motor_idx - 1, 0);
             rl.control.ClearInput();
         }
         else if (rl.control.current_keyboard == Input::Keyboard::Space)
@@ -272,6 +364,9 @@ public:
             amp = 0.0f;
             rl.control.ClearInput();
         }
+
+        // Map IDL motor index -> policy DOF index (may be -1 for empty slots / missing joints).
+        const int dof_idx = rl.InverseJointMapping(sdk_motor_idx);
 
         // Continuous sinusoid command on the selected joint
         float t = float(tick) * rl.params.Get<float>("dt");
@@ -285,21 +380,31 @@ public:
             fsm_command->motor_command.kd[i] = kd[i];
             fsm_command->motor_command.tau[i] = 0.0f;
         }
-        fsm_command->motor_command.q[joint_idx] = q_def[joint_idx] + offset;
+        if (dof_idx >= 0 && dof_idx < n)
+        {
+            fsm_command->motor_command.q[dof_idx] = q_def[dof_idx] + offset;
+        }
 
         // Periodic print
         if (tick - last_print_tick >= 50)
         {
             last_print_tick = tick;
-            std::string jn = "";
-            if (rl.params.Has("joint_names"))
+            const auto doc_names = G1_23DocMotorNames();
+            const std::string doc_name = (sdk_motor_idx >= 0 && sdk_motor_idx < (int)doc_names.size())
+                ? doc_names[sdk_motor_idx]
+                : "(unknown)";
+
+            std::string dof_name = "";
+            if (rl.params.Has("joint_names") && dof_idx >= 0)
             {
                 auto names = rl.params.Get<std::vector<std::string>>("joint_names");
-                if ((int)names.size() > joint_idx) jn = names[joint_idx];
+                if ((int)names.size() > dof_idx) dof_name = names[dof_idx];
             }
             std::cout << "\r\033[K" << std::flush
-                      << LOGGER::INFO << "[JointIndexTest] idx=" << joint_idx
-                      << " name=" << jn
+                      << LOGGER::INFO << "[JointIndexTest] sdk_idx=" << sdk_motor_idx
+                      << " doc=" << doc_name
+                      << " dof_idx=" << dof_idx
+                      << " dof=" << dof_name
                       << " amp=" << amp
                       << " hz=" << hz
                       << std::flush;

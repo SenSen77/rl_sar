@@ -259,10 +259,9 @@ ros2 run web_video_server web_video_server
 |RB+DPadLeft|Num3|技能3|
 |RB+DPadRight|Num4|技能4|
 |LB+DPadUp|Num5|技能5|
-|LB+DPadDown|Num6|（g1_23）单关节索引测试：站姿下只摆动一个关节，用于验证 joint_mapping/方向/encoder_bias|
-|LB+DPadDown|Num6|技能6|
-|LB+DPadLeft|Num7|技能7|
-|LB+DPadRight|Num8|技能8|
+|LB+DPadDown|Num6|（g1_23）单关节索引测试：站姿下只摆动一个关节，用于验证 joint_mapping/方向/encoder_bias（**Num7/Num8 改的是宇树文档 IDL motor index**，不是 policy 的 dof_idx）|
+|LB+DPadLeft|Num7|（g1_23）JointIndexTest：IDL motor index -1|
+|LB+DPadRight|Num8|（g1_23）JointIndexTest：IDL motor index +1|
 |**移动**|||
 |LY轴|W/S|前后移动 (X轴)|
 |LX轴|A/D|左右移动 (Y轴)|
