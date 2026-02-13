@@ -160,16 +160,22 @@ void RL_Real::GetState(RobotState<float> *state)
 
 void RL_Real::SetCommand(const RobotCommand<float> *command)
 {
+    RobotCmd cmd = {};
+
     for (int i = 0; i < this->params.Get<int>("num_of_dofs"); ++i)
     {
-        this->robot_joint_cmd_.joint_cmd[this->params.Get<std::vector<int>>("joint_mapping")[i]].position = command->motor_command.q[i];
-        this->robot_joint_cmd_.joint_cmd[this->params.Get<std::vector<int>>("joint_mapping")[i]].velocity = command->motor_command.dq[i];
-        this->robot_joint_cmd_.joint_cmd[this->params.Get<std::vector<int>>("joint_mapping")[i]].kp = command->motor_command.kp[i];
-        this->robot_joint_cmd_.joint_cmd[this->params.Get<std::vector<int>>("joint_mapping")[i]].kd = command->motor_command.kd[i];
-        this->robot_joint_cmd_.joint_cmd[this->params.Get<std::vector<int>>("joint_mapping")[i]].torque = command->motor_command.tau[i];
+        cmd.joint_cmd[this->params.Get<std::vector<int>>("joint_mapping")[i]].position = command->motor_command.q[i];
+        cmd.joint_cmd[this->params.Get<std::vector<int>>("joint_mapping")[i]].velocity = command->motor_command.dq[i];
+        cmd.joint_cmd[this->params.Get<std::vector<int>>("joint_mapping")[i]].kp = command->motor_command.kp[i];
+        cmd.joint_cmd[this->params.Get<std::vector<int>>("joint_mapping")[i]].kd = command->motor_command.kd[i];
+        cmd.joint_cmd[this->params.Get<std::vector<int>>("joint_mapping")[i]].torque = command->motor_command.tau[i];
     }
 
-    this->sender_->SendCmd(robot_joint_cmd_);
+    this->sender_->SendCmd(cmd);
+
+#ifdef PLOT
+    this->robot_joint_cmd_ = cmd;
+#endif
 }
 
 void RL_Real::RobotControl()

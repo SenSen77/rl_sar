@@ -144,19 +144,25 @@ void RL_Real::GetState(RobotState<float> *state)
 
 void RL_Real::SetCommand(const RobotCommand<float> *command)
 {
+    UNITREE_LEGGED_SDK::LowCmd cmd = {0};
+    this->unitree_udp.InitCmdData(cmd);
+
     for (int i = 0; i < this->params.Get<int>("num_of_dofs"); ++i)
     {
-        this->unitree_low_command.motorCmd[this->params.Get<std::vector<int>>("joint_mapping")[i]].mode = 0x0A;
-        this->unitree_low_command.motorCmd[this->params.Get<std::vector<int>>("joint_mapping")[i]].q = command->motor_command.q[i];
-        this->unitree_low_command.motorCmd[this->params.Get<std::vector<int>>("joint_mapping")[i]].dq = command->motor_command.dq[i];
-        this->unitree_low_command.motorCmd[this->params.Get<std::vector<int>>("joint_mapping")[i]].Kp = command->motor_command.kp[i];
-        this->unitree_low_command.motorCmd[this->params.Get<std::vector<int>>("joint_mapping")[i]].Kd = command->motor_command.kd[i];
-        this->unitree_low_command.motorCmd[this->params.Get<std::vector<int>>("joint_mapping")[i]].tau = command->motor_command.tau[i];
+        cmd.motorCmd[this->params.Get<std::vector<int>>("joint_mapping")[i]].mode = 0x0A;
+        cmd.motorCmd[this->params.Get<std::vector<int>>("joint_mapping")[i]].q = command->motor_command.q[i];
+        cmd.motorCmd[this->params.Get<std::vector<int>>("joint_mapping")[i]].dq = command->motor_command.dq[i];
+        cmd.motorCmd[this->params.Get<std::vector<int>>("joint_mapping")[i]].Kp = command->motor_command.kp[i];
+        cmd.motorCmd[this->params.Get<std::vector<int>>("joint_mapping")[i]].Kd = command->motor_command.kd[i];
+        cmd.motorCmd[this->params.Get<std::vector<int>>("joint_mapping")[i]].tau = command->motor_command.tau[i];
     }
 
-    this->unitree_safe.PowerProtect(this->unitree_low_command, this->unitree_low_state, 8);
-    // this->unitree_safe.PositionProtect(this->unitree_low_command, this->unitree_low_state);
-    this->unitree_udp.SetSend(this->unitree_low_command);
+    this->unitree_safe.PowerProtect(cmd, this->unitree_low_state, 8);
+    this->unitree_udp.SetSend(cmd);
+
+#ifdef PLOT
+    this->unitree_low_command = cmd;
+#endif
 }
 
 void RL_Real::RobotControl()
