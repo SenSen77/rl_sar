@@ -95,7 +95,28 @@ std::vector<float> RL::ComputeObservation()
         }
         else if (observation == "dof_pos")
         {
-            std::vector<float> dof_pos_rel = this->obs.dof_pos - this->params.Get<std::vector<float>>("default_dof_pos");
+            auto default_dof_pos = this->params.Get<std::vector<float>>("default_dof_pos");
+            std::vector<float> dof_pos_rel;
+
+            // Optional mjlab-parity: encoder bias in joint position observations.
+            // mjlab tracking uses joint_pos_rel(biased=True) == (q + encoder_bias) - default.
+            if (this->params.Get<bool>("use_encoder_bias", false))
+            {
+                auto encoder_bias = this->params.Get<std::vector<float>>("encoder_bias");
+                if (encoder_bias.size() == this->obs.dof_pos.size() && encoder_bias.size() == default_dof_pos.size())
+                {
+                    dof_pos_rel = (this->obs.dof_pos + encoder_bias) - default_dof_pos;
+                }
+                else
+                {
+                    // Fallback if config is missing/mismatched.
+                    dof_pos_rel = this->obs.dof_pos - default_dof_pos;
+                }
+            }
+            else
+            {
+                dof_pos_rel = this->obs.dof_pos - default_dof_pos;
+            }
             for (int i : this->params.Get<std::vector<int>>("wheel_indices"))
             {
                 dof_pos_rel[i] = 0.0f;
@@ -118,13 +139,20 @@ std::vector<float> RL::ComputeObservation()
             {
                 auto joint_pos_sdk = this->motion_loader->GetJointPos();
                 auto joint_vel_sdk = this->motion_loader->GetJointVel();
-                auto joint_mapping = this->params.Get<std::vector<int>>("joint_mapping");
-                std::vector<float> joint_pos_training(joint_mapping.size());
-                std::vector<float> joint_vel_training(joint_mapping.size());
-                for (size_t i = 0; i < joint_mapping.size(); ++i)
+                // IMPORTANT:
+                // - `joint_mapping` is used by the sim/real interface to map training-DOF order
+                //   <-> actuator/sensor order.
+                // - Whole-body-tracking also needs a mapping from training DOFs -> motion CSV/SDK DOFs.
+                //   Use `motion_joint_mapping` for that purpose to avoid corrupting actuator/sensor mapping.
+                auto motion_joint_mapping = this->params.Has("motion_joint_mapping")
+                                                ? this->params.Get<std::vector<int>>("motion_joint_mapping")
+                                                : this->params.Get<std::vector<int>>("joint_mapping");
+                std::vector<float> joint_pos_training(motion_joint_mapping.size());
+                std::vector<float> joint_vel_training(motion_joint_mapping.size());
+                for (size_t i = 0; i < motion_joint_mapping.size(); ++i)
                 {
-                    joint_pos_training[i] = joint_pos_sdk[joint_mapping[i]];
-                    joint_vel_training[i] = joint_vel_sdk[joint_mapping[i]];
+                    joint_pos_training[i] = joint_pos_sdk[motion_joint_mapping[i]];
+                    joint_vel_training[i] = joint_vel_sdk[motion_joint_mapping[i]];
                 }
                 motion_cmd.insert(motion_cmd.end(), joint_pos_training.begin(), joint_pos_training.end());
                 motion_cmd.insert(motion_cmd.end(), joint_vel_training.begin(), joint_vel_training.end());
@@ -140,12 +168,29 @@ std::vector<float> RL::ComputeObservation()
             std::vector<float> anchor_ori(6, 0.0f);
             if (this->motion_loader)
             {
-                auto waist_sdk_indices = this->params.Get<std::vector<int>>("waist_joint_indices");
-                std::vector<float> waist_angles = {
-                    this->obs.dof_pos[InverseJointMapping(waist_sdk_indices[0])],
-                    this->obs.dof_pos[InverseJointMapping(waist_sdk_indices[1])],
-                    this->obs.dof_pos[InverseJointMapping(waist_sdk_indices[2])]
+                auto motion_joint_mapping = this->params.Has("motion_joint_mapping")
+                                                ? this->params.Get<std::vector<int>>("motion_joint_mapping")
+                                                : this->params.Get<std::vector<int>>("joint_mapping");
+                auto inverse_motion_mapping = [&](int sdk_idx) -> int {
+                    for (size_t i = 0; i < motion_joint_mapping.size(); ++i)
+                    {
+                        if (motion_joint_mapping[i] == sdk_idx) return static_cast<int>(i);
+                    }
+                    return -1;
                 };
+                std::vector<float> waist_angles(3, 0.0f);
+                if (this->params.Has("waist_joint_indices"))
+                {
+                    auto waist_sdk_indices = this->params.Get<std::vector<int>>("waist_joint_indices");
+                    for (size_t i = 0; i < waist_angles.size() && i < waist_sdk_indices.size(); ++i)
+                    {
+                        int mapped = inverse_motion_mapping(waist_sdk_indices[i]);
+                        if (mapped >= 0 && static_cast<size_t>(mapped) < this->obs.dof_pos.size())
+                        {
+                            waist_angles[i] = this->obs.dof_pos[mapped];
+                        }
+                    }
+                }
                 std::vector<float> robot_torso_quat_w = MotionLoader::ComputeTorsoQuat(this->obs.base_quat, waist_angles);
                 std::vector<float> ref_torso_quat_w = this->motion_loader->GetAnchorQuat();
                 std::vector<float> init_quat = this->motion_loader->GetInitQuat();
@@ -179,6 +224,141 @@ std::vector<float> RL::ComputeObservation()
         obs.insert(obs.end(), obs_vec.begin(), obs_vec.end());
     }
     std::vector<float> clamped_obs = clamp(obs, -this->params.Get<float>("clip_obs"), this->params.Get<float>("clip_obs"));
+
+    // Optional debug: print key observation stats periodically for sim2sim mismatch diagnosis.
+    if (this->params.Get<bool>("debug_print_obs", false) && (this->motiontime % 50 == 0))
+    {
+        // Reconstruct a few high-signal pieces from the current observation struct (not the flattened vector).
+        // Projected gravity (body frame)
+        auto g_b = QuatRotateInverse(this->obs.base_quat, this->obs.gravity_vec);
+        float dof_pos_rel_abs_max = 0.0f;
+        auto def = this->params.Get<std::vector<float>>("default_dof_pos");
+        for (size_t i = 0; i < std::min(def.size(), this->obs.dof_pos.size()); ++i)
+        {
+            dof_pos_rel_abs_max = std::max(dof_pos_rel_abs_max, std::abs(this->obs.dof_pos[i] - def[i]));
+        }
+
+        // Whole-body-tracking motion command debug (first few values + max abs)
+        bool has_motion = (this->motion_loader != nullptr);
+        float motion_pos_abs_max = 0.0f;
+        float motion_vel_abs_max = 0.0f;
+        std::vector<float> motion_pos_first, motion_vel_first;
+
+        // Elbow debug (left/right) for constant bias diagnosis.
+        struct ElbowDbg
+        {
+            float q = 0.0f;
+            float q_def = 0.0f;
+            float q_rel = 0.0f;
+            float q_ref = 0.0f;
+            float q_ref_abs = 0.0f;
+            float err_rel = 0.0f;
+            float action = 0.0f;
+            float q_target = 0.0f;
+            float err_to_ref = 0.0f;
+        };
+        ElbowDbg elbow_l, elbow_r;
+        const int ELBOW_L_IDX = 16;
+        const int ELBOW_R_IDX = 21;
+
+        auto action_scale = this->params.Get<std::vector<float>>("action_scale");
+        auto safe_get = [](const std::vector<float>& v, int idx, float fallback = 0.0f) -> float {
+            if (idx < 0 || static_cast<size_t>(idx) >= v.size()) return fallback;
+            return v[static_cast<size_t>(idx)];
+        };
+        auto fill_elbow = [&](ElbowDbg& out, int dof_idx, float q_ref)
+        {
+            out.q = safe_get(this->obs.dof_pos, dof_idx, 0.0f);
+            out.q_def = safe_get(def, dof_idx, 0.0f);
+            out.q_rel = out.q - out.q_def;
+            out.q_ref = q_ref;
+            out.q_ref_abs = out.q_ref + out.q_def;
+            out.err_rel = out.q_rel - out.q_ref;
+            out.action = safe_get(this->obs.actions, dof_idx, 0.0f);
+            float s = safe_get(action_scale, dof_idx, 0.0f);
+            out.q_target = out.q_def + out.action * s;
+            out.err_to_ref = out.q - out.q_ref;
+        };
+        if (has_motion)
+        {
+            auto joint_pos_sdk = this->motion_loader->GetJointPos();
+            auto joint_vel_sdk = this->motion_loader->GetJointVel();
+            auto motion_joint_mapping = this->params.Has("motion_joint_mapping")
+                                            ? this->params.Get<std::vector<int>>("motion_joint_mapping")
+                                            : this->params.Get<std::vector<int>>("joint_mapping");
+            const size_t n = std::min<size_t>(motion_joint_mapping.size(), this->params.Get<int>("num_of_dofs"));
+            motion_pos_first.reserve(std::min<size_t>(n, 5));
+            motion_vel_first.reserve(std::min<size_t>(n, 5));
+            for (size_t i = 0; i < n; ++i)
+            {
+                int idx = motion_joint_mapping[i];
+                float p = (idx >= 0 && static_cast<size_t>(idx) < joint_pos_sdk.size()) ? joint_pos_sdk[idx] : 0.0f;
+                float v = (idx >= 0 && static_cast<size_t>(idx) < joint_vel_sdk.size()) ? joint_vel_sdk[idx] : 0.0f;
+                motion_pos_abs_max = std::max(motion_pos_abs_max, std::abs(p));
+                motion_vel_abs_max = std::max(motion_vel_abs_max, std::abs(v));
+                if (i < 5)
+                {
+                    motion_pos_first.push_back(p);
+                    motion_vel_first.push_back(v);
+                }
+            }
+
+            // Elbow ref angles from motion via mapping (training DOF idx -> motion CSV idx).
+            int elbow_l_sdk = (motion_joint_mapping.size() > (size_t)ELBOW_L_IDX) ? motion_joint_mapping[ELBOW_L_IDX] : -1;
+            int elbow_r_sdk = (motion_joint_mapping.size() > (size_t)ELBOW_R_IDX) ? motion_joint_mapping[ELBOW_R_IDX] : -1;
+            float elbow_l_ref = (elbow_l_sdk >= 0 && static_cast<size_t>(elbow_l_sdk) < joint_pos_sdk.size()) ? joint_pos_sdk[elbow_l_sdk] : 0.0f;
+            float elbow_r_ref = (elbow_r_sdk >= 0 && static_cast<size_t>(elbow_r_sdk) < joint_pos_sdk.size()) ? joint_pos_sdk[elbow_r_sdk] : 0.0f;
+            fill_elbow(elbow_l, ELBOW_L_IDX, elbow_l_ref);
+            fill_elbow(elbow_r, ELBOW_R_IDX, elbow_r_ref);
+        }
+        else
+        {
+            fill_elbow(elbow_l, ELBOW_L_IDX, 0.0f);
+            fill_elbow(elbow_r, ELBOW_R_IDX, 0.0f);
+        }
+
+        auto print_vec = [](const std::vector<float>& v) {
+            std::ostringstream oss;
+            oss << "[";
+            for (size_t i = 0; i < v.size(); ++i)
+            {
+                if (i) oss << ",";
+                oss << v[i];
+            }
+            oss << "]";
+            return oss.str();
+        };
+
+        // Last action debug (policy output after optional clamping)
+        float action_abs_max = 0.0f;
+        std::vector<float> action_first;
+        for (size_t i = 0; i < this->obs.actions.size(); ++i)
+        {
+            action_abs_max = std::max(action_abs_max, std::abs(this->obs.actions[i]));
+            if (i < 5) action_first.push_back(this->obs.actions[i]);
+        }
+        std::cout << std::endl
+                  << LOGGER::INFO << "[obs] cmd=(" << this->obs.commands[0] << "," << this->obs.commands[1] << "," << this->obs.commands[2] << ")"
+                  << " ang=(" << this->obs.ang_vel[0] << "," << this->obs.ang_vel[1] << "," << this->obs.ang_vel[2] << ")"
+                  << " g_b=(" << g_b[0] << "," << g_b[1] << "," << g_b[2] << ")"
+                  << " dof_rel_abs_max=" << dof_pos_rel_abs_max
+                  << " action_abs_max=" << action_abs_max
+                  << " action_first=" << print_vec(action_first)
+                  << " has_motion=" << (has_motion ? 1 : 0)
+                  << " motion_pos_abs_max=" << motion_pos_abs_max
+                  << " motion_vel_abs_max=" << motion_vel_abs_max
+                  << " motion_pos_first=" << print_vec(motion_pos_first)
+                  << " motion_vel_first=" << print_vec(motion_vel_first)
+                  << " elbowL(q=" << elbow_l.q << ",def=" << elbow_l.q_def << ",rel=" << elbow_l.q_rel
+                  << ",ref=" << elbow_l.q_ref << ",ref_abs=" << elbow_l.q_ref_abs << ",err_rel=" << elbow_l.err_rel
+                  << ",act=" << elbow_l.action << ",tgt=" << elbow_l.q_target
+                  << ",err=" << elbow_l.err_to_ref << ")"
+                  << " elbowR(q=" << elbow_r.q << ",def=" << elbow_r.q_def << ",rel=" << elbow_r.q_rel
+                  << ",ref=" << elbow_r.q_ref << ",ref_abs=" << elbow_r.q_ref_abs << ",err_rel=" << elbow_r.err_rel
+                  << ",act=" << elbow_r.action << ",tgt=" << elbow_r.q_target
+                  << ",err=" << elbow_r.err_to_ref << ")"
+                  << std::endl;
+    }
     return clamped_obs;
 }
 
@@ -188,7 +368,9 @@ void RL::InitObservations()
     this->obs.ang_vel = {0.0f, 0.0f, 0.0f};
     this->obs.gravity_vec = {0.0f, 0.0f, -1.0f};
     this->obs.commands = {0.0f, 0.0f, 0.0f};
-    this->obs.base_quat = {0.0f, 0.0f, 0.0f, 1.0f};
+    // Quaternion convention in this project is [w, x, y, z] (scalar-first).
+    // Identity quaternion is [1, 0, 0, 0].
+    this->obs.base_quat = {1.0f, 0.0f, 0.0f, 0.0f};
     this->obs.dof_pos = this->params.Get<std::vector<float>>("default_dof_pos");
     this->obs.dof_vel.clear();
     this->obs.dof_vel.resize(this->params.Get<int>("num_of_dofs"), 0.0f);
@@ -205,6 +387,11 @@ void RL::InitOutputs()
     this->output_dof_pos = this->params.Get<std::vector<float>>("default_dof_pos");
     this->output_dof_vel.clear();
     this->output_dof_vel.resize(num_of_dofs, 0.0f);
+
+    // initialize last valid policy outputs with a safe standing target
+    this->last_policy_dof_pos = this->params.Get<std::vector<float>>("default_dof_pos");
+    this->last_policy_dof_vel.assign(num_of_dofs, 0.0f);
+    this->last_policy_valid = false;
 }
 
 void RL::InitControl()
@@ -255,6 +442,7 @@ void RL::InitRL(std::string robot_config_path)
 
 void RL::ComputeOutput(const std::vector<float> &actions, std::vector<float> &output_dof_pos, std::vector<float> &output_dof_vel, std::vector<float> &output_dof_tau)
 {
+    // Keep behavior consistent with training: clip is handled at the policy output stage (see Forward()).
     std::vector<float> actions_scaled = actions * this->params.Get<std::vector<float>>("action_scale");
     std::vector<float> pos_actions_scaled = actions_scaled;
     std::vector<float> vel_actions_scaled(actions.size(), 0.0f);
@@ -263,10 +451,30 @@ void RL::ComputeOutput(const std::vector<float> &actions, std::vector<float> &ou
         pos_actions_scaled[i] = 0.0f;
         vel_actions_scaled[i] = actions_scaled[i];
     }
+    auto default_dof_pos = this->params.Get<std::vector<float>>("default_dof_pos");
+    auto use_encoder_bias = this->params.Get<bool>("use_encoder_bias", false);
+    auto encoder_bias = this->params.Get<std::vector<float>>("encoder_bias");
+
     std::vector<float> all_actions_scaled = pos_actions_scaled + vel_actions_scaled;
-    output_dof_pos = pos_actions_scaled + this->params.Get<std::vector<float>>("default_dof_pos");
+
+    // Position target: q_target = default + action_scale * action  (mjlab uses default offset too)
+    // Optional mjlab-parity: subtract encoder bias from commanded target so that
+    // the effective target in the biased joint space matches training.
+    output_dof_pos = pos_actions_scaled + default_dof_pos;
+    if (use_encoder_bias && encoder_bias.size() == output_dof_pos.size())
+    {
+        output_dof_pos = output_dof_pos - encoder_bias;
+    }
     output_dof_vel = vel_actions_scaled;
-    output_dof_tau = this->params.Get<std::vector<float>>("rl_kp") * (all_actions_scaled + this->params.Get<std::vector<float>>("default_dof_pos") - this->obs.dof_pos) - this->params.Get<std::vector<float>>("rl_kd") * this->obs.dof_vel;
+
+    // Torque target: tau = kp*(q_target - q) - kd*dq
+    // Apply the same encoder_bias correction to q_target if enabled.
+    std::vector<float> q_target_minus_q = all_actions_scaled + default_dof_pos - this->obs.dof_pos;
+    if (use_encoder_bias && encoder_bias.size() == q_target_minus_q.size())
+    {
+        q_target_minus_q = q_target_minus_q - encoder_bias;
+    }
+    output_dof_tau = this->params.Get<std::vector<float>>("rl_kp") * q_target_minus_q - this->params.Get<std::vector<float>>("rl_kd") * this->obs.dof_vel;
     output_dof_tau = clamp(output_dof_tau, -this->params.Get<std::vector<float>>("torque_limits"), this->params.Get<std::vector<float>>("torque_limits"));
 }
 
@@ -588,22 +796,46 @@ bool RLFSMState::Interpolate(
 
 void RLFSMState::RLControl()
 {
-    std::vector<float> _output_dof_pos, _output_dof_vel;
-    if (rl.output_dof_pos_queue.try_pop(_output_dof_pos) && rl.output_dof_vel_queue.try_pop(_output_dof_vel))
+    // NOTE:
+    // The policy thread pushes pos/vel (and tau) into separate queues.
+    // A naive `try_pop(pos) && try_pop(vel)` can drop `pos` if `vel` isn't available yet,
+    // leading to tiny/unstable motions (or inheriting previous state's kp=0).
+    // We instead drain queues independently and always command the last known good outputs.
+
+    std::vector<float> tmp;
+    while (rl.output_dof_pos_queue.try_pop(tmp))
     {
-        for (int i = 0; i < rl.params.Get<int>("num_of_dofs"); ++i)
+        if (!tmp.empty())
         {
-            if (!_output_dof_pos.empty())
-            {
-                fsm_command->motor_command.q[i] = _output_dof_pos[i];
-            }
-            if (!_output_dof_vel.empty())
-            {
-                fsm_command->motor_command.dq[i] = _output_dof_vel[i];
-            }
-            fsm_command->motor_command.kp[i] = rl.params.Get<std::vector<float>>("rl_kp")[i];
-            fsm_command->motor_command.kd[i] = rl.params.Get<std::vector<float>>("rl_kd")[i];
-            fsm_command->motor_command.tau[i] = 0;
+            rl.last_policy_dof_pos = std::move(tmp);
+            rl.last_policy_valid = true;
         }
+    }
+    while (rl.output_dof_vel_queue.try_pop(tmp))
+    {
+        if (!tmp.empty())
+        {
+            rl.last_policy_dof_vel = std::move(tmp);
+        }
+    }
+
+    const int n = rl.params.Get<int>("num_of_dofs");
+    // If we don't have any policy outputs yet, hold current posture with RL gains.
+    if (!rl.last_policy_valid && fsm_state && (int)fsm_state->motor_state.q.size() >= n)
+        {
+        rl.last_policy_dof_pos = fsm_state->motor_state.q;
+        rl.last_policy_dof_vel.assign(n, 0.0f);
+        rl.last_policy_valid = true;
+    }
+
+    auto kp = rl.params.Get<std::vector<float>>("rl_kp");
+    auto kd = rl.params.Get<std::vector<float>>("rl_kd");
+    for (int i = 0; i < n; ++i)
+            {
+        if ((int)rl.last_policy_dof_pos.size() >= n) fsm_command->motor_command.q[i] = rl.last_policy_dof_pos[i];
+        if ((int)rl.last_policy_dof_vel.size() >= n) fsm_command->motor_command.dq[i] = rl.last_policy_dof_vel[i];
+        fsm_command->motor_command.kp[i] = kp[i];
+        fsm_command->motor_command.kd[i] = kd[i];
+            fsm_command->motor_command.tau[i] = 0;
     }
 }

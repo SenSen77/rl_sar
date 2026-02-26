@@ -20,7 +20,9 @@ RL_Real::RL_Real(int argc, char **argv)
 
     // read params from yaml
     this->ang_vel_axis = "body";
-    this->robot_name = "g1";
+    // Optional: choose robot type by CLI argument for sim2real separation.
+    // Usage (non-ROS): ./rl_real_g1 <networkInterface> [g1|g1_23]
+    this->robot_name = (argc >= 3) ? std::string(argv[2]) : "g1";
     this->ReadYaml(this->robot_name, "base.yaml");
 
     // auto load FSM by robot_name

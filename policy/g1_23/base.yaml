@@ -1,0 +1,218 @@
+# Copyright (c) 2024-2025 Ziqi Fan
+# SPDX-License-Identifier: Apache-2.0
+
+g1_23:
+  dt: 0.005
+  decimation: 4
+
+  # 23DoF (G1 23dof URDF): legs(12) + waist_yaw(1) + arms(10, include wrist_roll only)
+  num_of_dofs: 23
+  wheel_indices: []
+
+  # NOTE: The joint order here is aligned to robot_lab unitree_g1 rough_env_cfg.py (23DoF),
+  # with name mapping:
+  #   torso_joint -> waist_yaw_joint
+  #   left/right_elbow_pitch_joint -> left/right_elbow_joint
+  #   left/right_elbow_roll_joint  -> left/right_wrist_roll_joint
+  joint_names:
+    - left_hip_pitch_joint
+    - left_hip_roll_joint
+    - left_hip_yaw_joint
+    - left_knee_joint
+    - left_ankle_pitch_joint
+    - left_ankle_roll_joint
+    - right_hip_pitch_joint
+    - right_hip_roll_joint
+    - right_hip_yaw_joint
+    - right_knee_joint
+    - right_ankle_pitch_joint
+    - right_ankle_roll_joint
+    - waist_yaw_joint
+    - left_shoulder_pitch_joint
+    - left_shoulder_roll_joint
+    - left_shoulder_yaw_joint
+    - left_elbow_joint
+    - left_wrist_roll_joint
+    - right_shoulder_pitch_joint
+    - right_shoulder_roll_joint
+    - right_shoulder_yaw_joint
+    - right_elbow_joint
+    - right_wrist_roll_joint
+
+  joint_controller_names:
+    - left_hip_pitch_controller
+    - left_hip_roll_controller
+    - left_hip_yaw_controller
+    - left_knee_controller
+    - left_ankle_pitch_controller
+    - left_ankle_roll_controller
+    - right_hip_pitch_controller
+    - right_hip_roll_controller
+    - right_hip_yaw_controller
+    - right_knee_controller
+    - right_ankle_pitch_controller
+    - right_ankle_roll_controller
+    - waist_yaw_controller
+    - left_shoulder_pitch_controller
+    - left_shoulder_roll_controller
+    - left_shoulder_yaw_controller
+    - left_elbow_controller
+    - left_wrist_roll_controller
+    - right_shoulder_pitch_controller
+    - right_shoulder_roll_controller
+    - right_shoulder_yaw_controller
+    - right_elbow_controller
+    - right_wrist_roll_controller
+
+  # Mapping from THIS FILE's `joint_names` order -> Unitree LowCmd_/LowState_ motor index.
+  #
+  # IMPORTANT:
+  # - 23DOF G1 uses LowCmd_.mode_machine == 1.
+  # - Motor indices have gaps (unused slots) for missing joints (waist roll/pitch, wrist pitch/yaw).
+  # - Reference: https://support.unitree.com/home/zh/G1_developer/joint_motor_sequence (23DOF table)
+  #
+  # This mapping is critical for sim2real:
+  # - GetState(): reads motor_state[q/dq/tau] from the correct motor indices
+  # - SetCommand(): writes motor_cmd[q/dq/kp/kd/tau] to the correct motor indices
+  joint_mapping: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 15, 16, 17, 18, 19, 22, 23, 24, 25, 26]
+
+  # Default pose (critical): align with IsaacLab G1 init_state.joint_pos used in training.
+  # Source: IsaacLab isaaclab_assets/robots/unitree.py (G1_CFG.init_state.joint_pos)
+  default_dof_pos:
+    - -0.20  # left_hip_pitch_joint
+    - 0.0    # left_hip_roll_joint
+    - 0.0    # left_hip_yaw_joint
+    - 0.42   # left_knee_joint
+    - -0.23  # left_ankle_pitch_joint
+    - 0.0    # left_ankle_roll_joint
+    - -0.20  # right_hip_pitch_joint
+    - 0.0    # right_hip_roll_joint
+    - 0.0    # right_hip_yaw_joint
+    - 0.42   # right_knee_joint
+    - -0.23  # right_ankle_pitch_joint
+    - 0.0    # right_ankle_roll_joint
+    - 0.0    # waist_yaw_joint (torso_joint in IsaacLab)
+    - 0.35   # left_shoulder_pitch_joint
+    - 0.16   # left_shoulder_roll_joint
+    - 0.0    # left_shoulder_yaw_joint
+    - 0.87   # left_elbow_joint (elbow_pitch in IsaacLab)
+    - 0.0    # left_wrist_roll_joint (elbow_roll in IsaacLab)
+    - 0.35   # right_shoulder_pitch_joint
+    - -0.16  # right_shoulder_roll_joint
+    - 0.0    # right_shoulder_yaw_joint
+    - 0.87   # right_elbow_joint (elbow_pitch in IsaacLab)
+    - 0.0    # right_wrist_roll_joint (elbow_roll in IsaacLab)
+
+  # Gains for fixed posture transitions (get up/down).
+  # Use values aligned to IsaacLab actuators to avoid sim2sim mismatch during transitions.
+  fixed_kp:
+    - 200.0
+    - 150.0
+    - 150.0
+    - 200.0
+    - 20.0
+    - 20.0
+    - 200.0
+    - 150.0
+    - 150.0
+    - 200.0
+    - 20.0
+    - 20.0
+    - 200.0
+    - 40.0
+    - 40.0
+    - 40.0
+    - 40.0
+    - 40.0
+    - 40.0
+    - 40.0
+    - 40.0
+    - 40.0
+    - 40.0
+
+  fixed_kd:
+    - 5.0
+    - 5.0
+    - 5.0
+    - 5.0
+    - 2.0
+    - 2.0
+    - 5.0
+    - 5.0
+    - 5.0
+    - 5.0
+    - 2.0
+    - 2.0
+    - 5.0
+    - 10.0
+    - 10.0
+    - 10.0
+    - 10.0
+    - 10.0
+    - 10.0
+    - 10.0
+    - 10.0
+    - 10.0
+    - 10.0
+
+  # Torque limits aligned to mjlab training (effort_limit per actuator).
+  # IMPORTANT: Order follows this file's `joint_names`.
+  torque_limits:
+    - 88.0
+    - 139.0
+    - 88.0
+    - 139.0
+    - 50.0
+    - 50.0
+    - 88.0
+    - 139.0
+    - 88.0
+    - 139.0
+    - 50.0
+    - 50.0
+    - 88.0
+    - 25.0
+    - 25.0
+    - 25.0
+    - 25.0
+    - 25.0
+    - 25.0
+    - 25.0
+    - 25.0
+    - 25.0
+    - 25.0
+
+  # Optional mjlab-parity: encoder bias.
+  #
+  # mjlab tracking observations use joint_pos_rel(biased=True) and actions subtract encoder_bias
+  # before applying position targets. Without this, the same policy can exhibit a constant
+  # offset (especially in arms) when deployed in rl_sar.
+  #
+  # For sim2real: set encoder_bias to your calibrated joint zero offsets.
+  use_encoder_bias: true
+  # IMPORTANT: Order follows `joint_names` above.
+  encoder_bias:
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.87
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.87
+    - 0.0
+

@@ -257,6 +257,11 @@ public:
     std::vector<float> output_dof_pos;
     std::vector<float> output_dof_vel;
 
+    // last valid policy outputs (used by FSM controller to avoid command drop when queues are out-of-sync)
+    std::vector<float> last_policy_dof_pos;
+    std::vector<float> last_policy_dof_vel;
+    bool last_policy_valid = false;
+
     // thread safety
     std::mutex model_mutex;
 };

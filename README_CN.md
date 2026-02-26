@@ -193,7 +193,19 @@ git clone https://github.com/osrf/gazebo_models.git ~/.gazebo/models
 ```bash
 ./cmake_build/bin/rl_sim_mujoco <ROBOT> <SCENE>
 # Example: ./cmake_build/bin/rl_sim_mujoco g1 scene_29dof
+# Example (23DoF): ./cmake_build/bin/rl_sim_mujoco g1_23 scene_23dof
 ```
+
+> [!NOTE]
+> 现在 `g1`(29DoF) 与 `g1_23`(23DoF) 使用 **独立的状态机(FSM)**：
+> - 29DoF：`src/rl_sar/fsm_robot/fsm_g1.hpp` → 配置目录 `policy/g1/*`
+> - 23DoF：`src/rl_sar/fsm_robot/fsm_g1_23.hpp` → 配置目录 `policy/g1_23/*`
+>
+> 这样可以避免两套配置路径互相覆盖，后续 sim2real 调参也互不影响。
+
+> [!TIP]
+> 为了与 mjlab 训练/播放行为一致（同一策略在两端表现差异常见原因），
+> `policy/g1_23/base.yaml` 增加了 `use_encoder_bias` 与 `encoder_bias`，用于模拟 mjlab 的 encoder_bias 处理链路。
 
 ### 使用手机网页控制 (实验性)
 
@@ -247,9 +259,9 @@ ros2 run web_video_server web_video_server
 |RB+DPadLeft|Num3|技能3|
 |RB+DPadRight|Num4|技能4|
 |LB+DPadUp|Num5|技能5|
-|LB+DPadDown|Num6|技能6|
-|LB+DPadLeft|Num7|技能7|
-|LB+DPadRight|Num8|技能8|
+|LB+DPadDown|Num6|（g1_23）单关节索引测试：站姿下只摆动一个关节，用于验证 joint_mapping/方向/encoder_bias（**Num7/Num8 改的是宇树文档 IDL motor index**，不是 policy 的 dof_idx）|
+|LB+DPadLeft|Num7|（g1_23）JointIndexTest：IDL motor index -1|
+|LB+DPadRight|Num8|（g1_23）JointIndexTest：IDL motor index +1|
 |**移动**|||
 |LY轴|W/S|前后移动 (X轴)|
 |LX轴|A/D|左右移动 (Y轴)|
@@ -311,7 +323,7 @@ ros2 run rl_sar rl_real_go2 <YOUR_NETWORK_INTERFACE> [wheel]
 ./cmake_build/bin/rl_real_go2 <YOUR_NETWORK_INTERFACE> [wheel]
 ```
 
-G1(29dofs):
+G1:
 
 开机后将机器人吊起来，按L2+R2进入调试模式，然后新建终端，启动控制程序。
 
@@ -325,7 +337,7 @@ source install/setup.bash
 ros2 run rl_sar rl_real_g1 <YOUR_NETWORK_INTERFACE>
 
 # CMake
-./cmake_build/bin/rl_real_g1 <YOUR_NETWORK_INTERFACE>
+./cmake_build/bin/rl_real_g1 <YOUR_NETWORK_INTERFACE> [g1|g1_23]
 ```
 
 #### 在机载Jetson中部署

@@ -193,7 +193,19 @@ git clone https://github.com/osrf/gazebo_models.git ~/.gazebo/models
 ```bash
 ./cmake_build/bin/rl_sim_mujoco <ROBOT> <SCENE>
 # Example: ./cmake_build/bin/rl_sim_mujoco g1 scene_29dof
+# Example (23DoF): ./cmake_build/bin/rl_sim_mujoco g1_23 scene_23dof
 ```
+
+> [!NOTE]
+> `g1` (29DoF) and `g1_23` (23DoF) now use **separate FSM implementations**:
+> - 29DoF FSM: `src/rl_sar/fsm_robot/fsm_g1.hpp` → configs under `policy/g1/*`
+> - 23DoF FSM: `src/rl_sar/fsm_robot/fsm_g1_23.hpp` → configs under `policy/g1_23/*`
+>
+> This prevents config-path collisions and makes future sim2real tweaks independent.
+
+> [!TIP]
+> For mjlab parity (important when deploying policies trained in mjlab), `policy/g1_23/base.yaml`
+> supports `use_encoder_bias` + `encoder_bias` to mimic mjlab's encoder-bias handling.
 
 ### Control with Mobile Web (Experimental)
 
@@ -247,9 +259,9 @@ Visit [http://robot.robotsfan.com/](http://robot.robotsfan.com/), fill in the IP
 |RB+DPadLeft|Num3|Skill 3|
 |RB+DPadRight|Num4|Skill 4|
 |LB+DPadUp|Num5|Skill 5|
-|LB+DPadDown|Num6|Skill 6|
-|LB+DPadLeft|Num7|Skill 7|
-|LB+DPadRight|Num8|Skill 8|
+|LB+DPadDown|Num6|(g1_23) Joint index test: stand + oscillate one joint to verify joint_mapping/direction/encoder_bias (**Num7/Num8 now change Unitree IDL motor index**, not policy dof_idx)|
+|LB+DPadLeft|Num7|(g1_23) JointIndexTest: IDL motor index -1|
+|LB+DPadRight|Num8|(g1_23) JointIndexTest: IDL motor index +1|
 |**Movement**|||
 |LY Axis|W/S|Forward/Backward movement (X-axis)|
 |LX Axis|A/D|Left/Right movement (Y-axis)|
@@ -311,7 +323,7 @@ ros2 run rl_sar rl_real_go2 <YOUR_NETWORK_INTERFACE> [wheel]
 ./cmake_build/bin/rl_real_go2 <YOUR_NETWORK_INTERFACE> [wheel]
 ```
 
-G1(29dofs):
+G1:
 
 Turn on the robot and lift it up, press L2+R2 to enter the debugging mode, then open a new terminal and start the control program.
 
@@ -325,7 +337,7 @@ source install/setup.bash
 ros2 run rl_sar rl_real_g1 <YOUR_NETWORK_INTERFACE>
 
 # CMake
-./cmake_build/bin/rl_real_g1 <YOUR_NETWORK_INTERFACE>
+./cmake_build/bin/rl_real_g1 <YOUR_NETWORK_INTERFACE> [g1|g1_23]
 ```
 
 #### Deploying on the Onboard Jetson
